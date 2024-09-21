@@ -24,7 +24,6 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage }).single("file");
 
-// Function to extract content and images from PPTX file
 async function extractPptxContent(pptxPath) {
   const pptxStream = fs.readFileSync(pptxPath);
   const zip = await JSZip.loadAsync(pptxStream);
@@ -44,10 +43,15 @@ async function extractPptxContent(pptxPath) {
       return null;
     }
     const relXml = await relFile.async("string");
-    const relData = await xml2js.parseStringPromise(relXml);
+    const relData = await xml2js.parseStringPromise(relXml, {
+      explicitArray: false,
+    });
     const relationships = relData.Relationships.Relationship;
     const slideNumber = relFileName.match(/slide(\d+)\.xml\.rels$/)[1];
-    slideRels.set(slideNumber, relationships);
+    slideRels.set(
+      slideNumber,
+      Array.isArray(relationships) ? relationships : [relationships]
+    );
   });
 
   await Promise.all(slideRelPromises);
@@ -67,98 +71,23 @@ async function extractPptxContent(pptxPath) {
         return null; // Skip this slide
       }
       const slideXml = await slideFile.async("string");
-      const slideData = await xml2js.parseStringPromise(slideXml);
+      const slideData = await xml2js.parseStringPromise(slideXml, {
+        explicitArray: false,
+      });
       const slideNumber = slideFileName.match(/slide(\d+)\.xml$/)[1];
 
       const slideContent = [];
 
-      const shapes = slideData["p:sld"]["p:cSld"][0]["p:spTree"][0];
+      const shapes = slideData["p:sld"]["p:cSld"]["p:spTree"];
 
-      // Extract text and images in order
-      const elements = [].concat(shapes["p:sp"] || [], shapes["p:pic"] || []);
-
-      for (const element of elements) {
-        if (element["p:txBody"]) {
-          // It's a text shape
-          const paras = element["p:txBody"][0]["a:p"];
-          let textContent = "";
-          let i = 1;
-          for (const para of paras) {
-            if (para["a:r"]) {
-              for (const run of para["a:r"]) {
-                const texts = run["a:t"];
-                if (texts) {
-                  for (const text of texts) {
-                    textContent += paras.length === 1 ? text : ` ${i}.` + text;
-                  }
-                }
-              }
-            }
-            i += 1;
-          }
-          if (textContent.trim()) {
-            slideContent.push({
-              type: "text",
-              content: textContent.trim(),
-            });
-          }
-        } else if (element["p:blipFill"]) {
-          // It's an image
-          const blip = element["p:blipFill"][0]["a:blip"][0];
-          const embedId = blip["$"]["r:embed"];
-          const relationships = slideRels.get(slideNumber);
-          if (!relationships) continue;
-          const targetRel = relationships.find(
-            (rel) => rel["$"].Id === embedId
-          );
-          if (!targetRel) continue;
-          const target = targetRel["$"].Target;
-
-          // Construct the image path
-          let imagePath = target;
-          if (!path.isAbsolute(imagePath)) {
-            imagePath = path.posix.join(
-              path.posix.dirname(`ppt/slides/slide${slideNumber}.xml`),
-              target
-            );
-          }
-
-          const imageFile = zip.file(imagePath);
-          if (!imageFile) {
-            console.error(`Image file not found: ${imagePath}`);
-            continue;
-          }
-
-          // Extract the image file
-          const imageData = await imageFile.async("nodebuffer");
-          const imageFileName = `slide${slideNumber}_${path.basename(target)}`;
-          const outputDir = path.join("output", "images");
-          const outputPath = path.join(outputDir, imageFileName);
-
-          // Ensure output directory exists
-          fs.mkdirSync(outputDir, { recursive: true });
-
-          const imageExt = path.extname(target).toLowerCase();
-          try {
-            if (imageExt === ".jpg" || imageExt === ".jpeg") {
-              // If it's already a JPEG, no need to recompress
-              await fs.promises.writeFile(outputPath, imageData);
-            } else {
-              // Convert to JPEG
-              await sharp(imageData)
-                .jpeg({ quality: 60 }) // Adjust quality as needed
-                .toFile(outputPath);
-            }
-            slideContent.push({
-              type: "image",
-              content: outputPath,
-            });
-          } catch (err) {
-            console.error("Error processing the image:", err);
-            continue;
-          }
-        }
-      }
+      // Extract content recursively to handle nested elements
+      extractContentFromShapes(
+        shapes,
+        slideContent,
+        slideNumber,
+        slideRels,
+        zip
+      );
 
       return { slideNumber: parseInt(slideNumber), slideContent };
     })
@@ -175,10 +104,166 @@ async function extractPptxContent(pptxPath) {
   return validSlides;
 }
 
+function extractContentFromShapes(
+  shapes,
+  slideContent,
+  slideNumber,
+  slideRels,
+  zip
+) {
+  if (!shapes) return;
+
+  const elements = [].concat(
+    shapes["p:sp"] || [],
+    shapes["p:pic"] || [],
+    shapes["p:grpSp"] || [],
+    shapes["p:graphicFrame"] || [],
+    shapes["p:cxnSp"] || [] // Connection shapes can also contain nested elements
+  );
+
+  elements.forEach((element) => {
+    if (element["p:txBody"]) {
+      // It's a text shape
+      const paras = element["p:txBody"]["a:p"];
+      let textContent = "";
+      if (Array.isArray(paras)) {
+        paras.forEach((para) => {
+          textContent += extractTextFromPara(para);
+        });
+      } else {
+        // Handle single paragraph case
+        textContent += extractTextFromPara(paras);
+      }
+      if (textContent.trim()) {
+        slideContent.push({
+          type: "text",
+          content: textContent.trim(),
+        });
+      }
+    } else if (element["p:blipFill"]) {
+      // It's an image
+      extractImageFromElement(
+        element,
+        slideContent,
+        slideNumber,
+        slideRels,
+        zip
+      );
+    } else if (element["p:grpSp"]) {
+      // It's a group shape, recursively extract content
+      extractContentFromShapes(
+        element["p:spTree"],
+        slideContent,
+        slideNumber,
+        slideRels,
+        zip
+      );
+    } else {
+      // Check other nested elements like p:graphicFrame, p:cxnSp
+      for (const key in element) {
+        if (element.hasOwnProperty(key) && typeof element[key] === "object") {
+          extractContentFromShapes(
+            element[key],
+            slideContent,
+            slideNumber,
+            slideRels,
+            zip
+          );
+        }
+      }
+    }
+  });
+}
+
+function extractImageFromElement(
+  element,
+  slideContent,
+  slideNumber,
+  slideRels,
+  zip
+) {
+  const blip = element["p:blipFill"]["a:blip"];
+  const embedId = blip["$"]["r:embed"];
+  const relationships = slideRels.get(slideNumber);
+  if (!relationships) return;
+  const targetRel = relationships.find((rel) => rel["$"].Id === embedId);
+  if (!targetRel) return;
+  const target = targetRel["$"].Target;
+
+  // Construct the image path
+  let imagePath = target;
+  if (!path.isAbsolute(imagePath)) {
+    imagePath = path.posix.join(
+      path.posix.dirname(`ppt/slides/slide${slideNumber}.xml`),
+      target
+    );
+  }
+
+  const imageFile = zip.file(imagePath);
+  if (!imageFile) {
+    console.error(`Image file not found: ${imagePath}`);
+    return;
+  }
+
+  // Extract the image file
+  imageFile
+    .async("nodebuffer")
+    .then((data) => {
+      const imageFileName = `slide${slideNumber}_${path.basename(target)}`;
+      const outputDir = path.join("output", "images");
+      const outputPath = path.join(outputDir, imageFileName);
+
+      // Ensure output directory exists
+      fs.mkdirSync(outputDir, { recursive: true });
+
+      const imageExt = path.extname(target).toLowerCase();
+      return processImage(data, outputPath, imageExt, slideContent);
+    })
+    .catch((err) => {
+      console.error("Error extracting image:", err);
+    });
+}
+
+async function processImage(imageData, outputPath, imageExt, slideContent) {
+  try {
+    if (imageExt === ".jpg" || imageExt === ".jpeg") {
+      // If it's already a JPEG, no need to recompress
+      await fs.promises.writeFile(outputPath, imageData);
+    } else {
+      // Convert to JPEG
+      await sharp(imageData)
+        .jpeg({ quality: 60 }) // Adjust quality as needed
+        .toFile(outputPath);
+    }
+    slideContent.push({
+      type: "image",
+      content: outputPath,
+    });
+  } catch (err) {
+    console.error("Error processing the image:", err);
+  }
+}
+
+function extractTextFromPara(para) {
+  let textContent = "";
+  const runs = para["a:r"];
+  if (Array.isArray(runs)) {
+    runs.forEach((run) => {
+      if (run["a:t"]) {
+        textContent += run["a:t"] + " ";
+      }
+    });
+  } else if (runs && runs["a:t"]) {
+    // Single run
+    textContent += runs["a:t"] + " ";
+  }
+  return textContent;
+}
+
 // Function to process slides and send content to OpenAI
 const supportedFormats = new Set([".jpeg", ".jpg", ".png", ".tiff"]);
 
-async function processSlides(slides, thread) {
+async function processSlides(slides) {
   const messages = []; // Collect messages from all slides
   for (const slide of slides) {
     console.log(`\nProcessing Slide ${slide.slideNumber}`);
@@ -226,11 +311,7 @@ async function processSlides(slides, thread) {
       continue;
     }
 
-    const message = await openai.beta.threads.messages.create(thread, {
-      role: "user",
-      content: messageResult,
-    });
-    messages.push(message);
+    messages.push(messageResult);
   }
 
   return messages;
@@ -275,6 +356,16 @@ const deleteFiles = async (messages) => {
   // Wait for all deletion promises to resolve in parallel
   await Promise.all(deletePromises);
 };
+
+// Function to group slides into chunks of 10
+const groupSlides = (slides, chunkSize = 10) => {
+  const chunks = [];
+  for (let i = 0; i < slides.length; i += chunkSize) {
+    chunks.push(slides.slice(i, i + chunkSize));
+  }
+  return chunks;
+};
+
 // Exported function to handle file upload
 export const fileUpload = async (req, res, next) => {
   try {
@@ -288,26 +379,57 @@ export const fileUpload = async (req, res, next) => {
 
       const pptFile = path.resolve(req.file.path);
       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
-      const thread = await openai.beta.threads.create();
 
       try {
         const slides = await extractPptxContent(pptFile);
-        const messages = await processSlides(slides, thread.id);
 
-        let run = await openai.beta.threads.runs.createAndPoll(thread.id, {
-          assistant_id: assistant,
-        });
-        const result = await openai.beta.threads.messages.list(run.thread_id);
-        await deleteFiles(messages);
-        const json = result.data.find((item) => item.role === "assistant")
-          .content[0].text?.value;
-        const output =
-          typeof JSON.parse(json) === "object"
-            ? JSON.parse(json)
-            : { error: "Something went wrong!" };
+        // Group slides into chunks of 10
+        const slideGroups = groupSlides(slides, 10);
+        const allResults = [];
+
+        for (let i = 0; i < slideGroups.length; i++) {
+          const group = slideGroups[i];
+
+          // Create a new thread for each group of slides
+          const thread = await openai.beta.threads.create();
+
+          // Process slides in the current group
+          const messages = await processSlides(group);
+          // Add messages to the current thread
+          for (const message of messages) {
+            await openai.beta.threads.messages.create(thread.id, {
+              role: "user",
+              content: message,
+            });
+          }
+
+          // Call OpenAI run for this group of slides
+          let run = await openai.beta.threads.runs.createAndPoll(thread.id, {
+            assistant_id: assistant,
+          });
+
+          const result = await openai.beta.threads.messages.list(run.thread_id);
+
+          // Store results for this group
+          const json = result.data.find((item) => item.role === "assistant")
+            .content[0].text?.value;
+          console.log(json);
+          const output =
+            typeof JSON.parse(json) === "object"
+              ? JSON.parse(json)
+              : { error: "Something went wrong!" };
+
+          allResults.push(output);
+
+          // Optionally delete files after processing each group
+          console.log(result.data);
+          await deleteFiles(result.data);
+        }
+
         res.status(200).json({
-          message: output,
-          messages,
+          message: [].concat(
+            ...allResults.map((item) => item.transcript_segments)
+          ),
         });
       } catch (loaderError) {
         console.error(loaderError);
