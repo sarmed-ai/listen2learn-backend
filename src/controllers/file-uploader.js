@@ -365,14 +365,25 @@ const deleteFiles = async (messages) => {
   await Promise.all(deletePromises);
 };
 
-// Function to group slides into chunks of 10
-const groupSlides = (slides, chunkSize = 10) => {
-  const chunks = [];
-  for (let i = 0; i < slides.length; i += chunkSize) {
-    chunks.push(slides.slice(i, i + chunkSize));
+
+// const groupSlides = (slides, chunkSize) => {
+//   const chunks = [];
+//   for (let i = 0; i < slides.length; i += chunkSize) {
+//     chunks.push(slides.slice(i, i + chunkSize));
+//   }
+//   return chunks;
+// };
+
+function groupSlides(slides, groupSize) {
+  let slideGroups = [];
+  for (let i = 0; i < slides.length; i += groupSize) {
+    const group = slides.slice(i, i + groupSize);
+    if (group.length > 0) {
+      slideGroups.push(group); // Only push non-empty groups
+    }
   }
-  return chunks;
-};
+  return slideGroups;
+}
 
 
 export const fileUpload = async (req, res, next) => {
@@ -386,7 +397,7 @@ export const fileUpload = async (req, res, next) => {
 
       try {
         const slides = await extractPptxContent(pptFile);
-        const slideGroups = groupSlides(slides, 5);  // Chunk into 5
+        const slideGroups = groupSlides(slides, 2);  
 
         for (let i = 0; i < slideGroups.length; i++) {
           const group = slideGroups[i];
@@ -425,15 +436,18 @@ export const fileUpload = async (req, res, next) => {
             }
           });
           console.log("Partial response Sent");
+          // Optionally delete files and clean up after each group
           await deleteFiles(result.data);
         }
+
+        
+        res.status(200).json({ message: 'Processing started' });
+
         wss.clients.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
             client.close();
           }
         });
-
-        res.status(200).json({ message: 'Processing started' });
 
       } catch (error) {
         console.error(error);
