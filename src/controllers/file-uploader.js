@@ -386,15 +386,13 @@ export const fileUpload = async (req, res, next) => {
 
       try {
         const slides = await extractPptxContent(pptFile);
-        
-        // Check if there are slides
-        if (slides.length === 0) {
-          return res.status(400).json({ message: 'No slides found in the uploaded file' });
-        }
+        const slideGroups = groupSlides(slides, 5);  // Chunk into 5
 
-        // If there are fewer than 5 slides, process them directly
-        if (slides.length < 5) {
-          const messages = await processSlides(slides);
+        for (let i = 0; i < slideGroups.length; i++) {
+          const group = slideGroups[i];
+
+          // Process the group
+          const messages = await processSlides(group);
           const thread = await openai.beta.threads.create();
 
           // Send messages to OpenAI
@@ -414,63 +412,21 @@ export const fileUpload = async (req, res, next) => {
           const output = result.data.find((msg) => msg.role === 'assistant').content[0].text?.value;
           const parsedOutput = JSON.parse(output);
 
-          console.log("Parsed output: ", parsedOutput.transcript_segments);
+          console.log("Parseddd outputtt: ", parsedOutput.transcript_segments);
           // Send the result to the connected WebSocket client
           wss.clients.forEach((client) => {
             if (client.readyState === WebSocket.OPEN) {
               client.send(JSON.stringify({
-                groupNumber: 1,  // Only one group since there are fewer than 5 slides
+                groupNumber: i + 1,
                 result: parsedOutput.transcript_segments
               }));
+            }else{
+              console.log("Client not connected");
             }
           });
-          console.log("Partial response sent");
+          console.log("Partial response Sent");
           await deleteFiles(result.data);
-        } else {
-          // Proceed with grouping slides if there are 5 or more
-          const slideGroups = groupSlides(slides, 5);  // Chunk into 5
-
-          for (let i = 0; i < slideGroups.length; i++) {
-            const group = slideGroups[i];
-
-            // Process the group
-            const messages = await processSlides(group);
-            const thread = await openai.beta.threads.create();
-
-            // Send messages to OpenAI
-            for (const message of messages) {
-              await openai.beta.threads.messages.create(thread.id, {
-                role: 'user',
-                content: message,
-              });
-            }
-
-            const run = await openai.beta.threads.runs.createAndPoll(thread.id, {
-              assistant_id: assistant,
-            });
-            const result = await openai.beta.threads.messages.list(run.thread_id);
-
-            // Parse the response
-            const output = result.data.find((msg) => msg.role === 'assistant').content[0].text?.value;
-            const parsedOutput = JSON.parse(output);
-
-            console.log("Parsed output: ", parsedOutput.transcript_segments);
-            // Send the result to the connected WebSocket client
-            wss.clients.forEach((client) => {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({
-                  groupNumber: i + 1,
-                  result: parsedOutput.transcript_segments
-                }));
-              } else {
-                console.log("Client not connected");
-              }
-            });
-            console.log("Partial response sent");
-            await deleteFiles(result.data);
-          }
         }
-
         wss.clients.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
             client.close();
