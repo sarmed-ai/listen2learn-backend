@@ -381,33 +381,36 @@ export const fileUpload = async (req, res, next) => {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
       const pptFile = path.resolve(req.file.path);
-      const assistant = 'asst_RWO3Vnbk7CIGBx7A7ppmJeWa';
+      const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
 
       try {
         const slides = await extractPptxContent(pptFile);
 
         // Group slides into chunks of 10
-        const slideGroups = groupSlides(slides, 5);
+        const slideGroups = groupSlides(slides, 10);
         const allResults = [];
 
         for (let i = 0; i < slideGroups.length; i++) {
           const group = slideGroups[i];
 
-          // Process the group
-          const messages = await processSlides(group);
+          // Create a new thread for each group of slides
           const thread = await openai.beta.threads.create();
 
-          // Send messages to OpenAI
+          // Process slides in the current group
+          const messages = await processSlides(group);
+          // Add messages to the current thread
           for (const message of messages) {
             await openai.beta.threads.messages.create(thread.id, {
-              role: 'user',
+              role: "user",
               content: message,
             });
           }
 
-          const run = await openai.beta.threads.runs.createAndPoll(thread.id, {
+          // Call OpenAI run for this group of slides
+          let run = await openai.beta.threads.runs.createAndPoll(thread.id, {
             assistant_id: assistant,
           });
+
           const result = await openai.beta.threads.messages.list(run.thread_id);
 
           // Store results for this group
@@ -442,22 +445,20 @@ export const fileUpload = async (req, res, next) => {
           await deleteFiles(result.data);
         }
 
-        
-        res.status(200).json({ message: 'Processing started' });
-
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.close();
-          }
+        res.status(200).json({
+          message: [].concat(
+            ...allResults.map((item) => item.transcript_segments)
+          ),
         });
-
-      } catch (error) {
-        console.error(error);
-        res.status(400).json({ message: error.message });
+      } catch (loaderError) {
+        console.error(loaderError);
+        res.status(400).json({ message: loaderError.message });
       }
     });
   } catch (error) {
+    console.error(error);
     next(error);
   }
 };
+
 
