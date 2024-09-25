@@ -1,3 +1,4 @@
+import WebSocket, { WebSocketServer } from 'ws';
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -10,6 +11,13 @@ import pLimit from "p-limit";
 // Initialize OpenAI API with your API key
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+});
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('connection', (ws) => {
+  console.log('Client connected');
+  ws.on('close', () => console.log('Client disconnected'));
 });
 
 // Set up Multer storage for file uploads
@@ -367,15 +375,169 @@ const groupSlides = (slides, chunkSize = 10) => {
 };
 
 // Exported function to handle file upload
+// export const fileUpload = async (req, res, next) => {
+//   try {
+//     upload(req, res, async function (err) {
+//       if (err) {
+//         return res.status(500).json({ error: err.message });
+//       }
+//       if (!req.file) {
+//         return res.status(400).json({ message: "No file uploaded" });
+//       }
+
+//       const pptFile = path.resolve(req.file.path);
+//       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
+
+//       try {
+//         const slides = await extractPptxContent(pptFile);
+
+//         // Group slides into chunks of 10
+//         const slideGroups = groupSlides(slides, 10);
+//         const allResults = [];
+
+//         for (let i = 0; i < slideGroups.length; i++) {
+//           const group = slideGroups[i];
+
+//           // Create a new thread for each group of slides
+//           const thread = await openai.beta.threads.create();
+
+//           // Process slides in the current group
+//           const messages = await processSlides(group);
+//           // Add messages to the current thread
+//           for (const message of messages) {
+//             await openai.beta.threads.messages.create(thread.id, {
+//               role: "user",
+//               content: message,
+//             });
+//           }
+
+//           // Call OpenAI run for this group of slides
+//           let run = await openai.beta.threads.runs.createAndPoll(thread.id, {
+//             assistant_id: assistant,
+//           });
+
+//           const result = await openai.beta.threads.messages.list(run.thread_id);
+
+//           // Store results for this group
+//           const json = result.data.find((item) => item.role === "assistant")
+//             .content[0].text?.value;
+//           console.log(json);
+//           const output =
+//             typeof JSON.parse(json) === "object"
+//               ? JSON.parse(json)
+//               : { error: "Something went wrong!" };
+
+//           allResults.push(output);
+
+//           // Optionally delete files after processing each group
+//           console.log(result.data);
+//           await deleteFiles(result.data);
+//         }
+
+//         res.status(200).json({
+//           message: [].concat(
+//             ...allResults.map((item) => item.transcript_segments)
+//           ),
+//         });
+//       } catch (loaderError) {
+//         console.error(loaderError);
+//         res.status(400).json({ message: loaderError.message });
+//       }
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     next(error);
+//   }
+// };
+
+
+
+
+
+
+// export const fileUpload = async (req, res, next) => {
+//   try {
+//     upload(req, res, async function (err) {
+//       if (err) return res.status(500).json({ error: err.message });
+//       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+//       const pptFile = path.resolve(req.file.path);
+//       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
+
+//       try {
+//         const slides = await extractPptxContent(pptFile);
+//         const slideGroups = groupSlides(slides, 10); // Adjust group size as needed
+
+//         for (let i = 0; i < slideGroups.length; i++) {
+//           const group = slideGroups[i];
+
+//           // Process the group
+//           const messages = await processSlides(group);
+//           const thread = await openai.beta.threads.create();
+
+//           // Send messages to OpenAI
+//           for (const message of messages) {
+//             await openai.beta.threads.messages.create(thread.id, {
+//               role: "user",
+//               content: message,
+//             });
+//           }
+
+//           const run = await openai.beta.threads.runs.createAndPoll(thread.id, {
+//             assistant_id: assistant,
+//           });
+//           const result = await openai.beta.threads.messages.list(run.thread_id);
+
+//           // Parse the response
+//           const output = result.data.find((msg) => msg.role === "assistant").content[0].text?.value;
+//           const parsedOutput = JSON.parse(output);
+
+//           console.log("Parsed output: ", parsedOutput.transcript_segments);
+
+//           // Send the result to the connected WebSocket client
+//           wss.clients.forEach((client) => {
+//             if (client.readyState === WebSocket.OPEN) {
+//               client.send(
+//                 JSON.stringify({
+//                   groupNumber: i + 1,
+//                   result: parsedOutput.transcript_segments,
+//                 })
+//               );
+//             } else {
+//               console.log("Client not connected");
+//             }
+//           });
+
+//           console.log("Partial response sent");
+
+//           // Optionally delete files and clean up after each group
+//           await deleteFiles(result.data);
+//         }
+
+//         res.status(200).json({ message: "Processing started" });
+
+//         // Close WebSocket connections after processing
+//         wss.clients.forEach((client) => {
+//           if (client.readyState === WebSocket.OPEN) {
+//             client.close();
+//           }
+//         });
+//       } catch (error) {
+//         console.error(error);
+//         res.status(400).json({ message: error.message });
+//       }
+//     });
+//   } catch (error) {
+//     next(error);
+//   }
+// };
+
+
 export const fileUpload = async (req, res, next) => {
   try {
     upload(req, res, async function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
-      }
+      if (err) return res.status(500).json({ error: err.message });
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
       const pptFile = path.resolve(req.file.path);
       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
@@ -384,7 +546,7 @@ export const fileUpload = async (req, res, next) => {
         const slides = await extractPptxContent(pptFile);
 
         // Group slides into chunks of 10
-        const slideGroups = groupSlides(slides, 10);
+        const slideGroups = groupSlides(slides, 5);
         const allResults = [];
 
         for (let i = 0; i < slideGroups.length; i++) {
@@ -421,6 +583,22 @@ export const fileUpload = async (req, res, next) => {
 
           allResults.push(output);
 
+          // Send the result to the connected WebSocket clients
+          wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(
+                JSON.stringify({
+                  groupNumber: i + 1,
+                  result: output.transcript_segments,
+                })
+              );
+            } else {
+              console.log("Client not connected");
+            }
+          });
+
+          console.log("Partial response sent");
+
           // Optionally delete files after processing each group
           console.log(result.data);
           await deleteFiles(result.data);
@@ -441,3 +619,4 @@ export const fileUpload = async (req, res, next) => {
     next(error);
   }
 };
+
