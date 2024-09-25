@@ -365,39 +365,30 @@ const deleteFiles = async (messages) => {
   await Promise.all(deletePromises);
 };
 
-
-// const groupSlides = (slides, chunkSize) => {
-//   const chunks = [];
-//   for (let i = 0; i < slides.length; i += chunkSize) {
-//     chunks.push(slides.slice(i, i + chunkSize));
-//   }
-//   return chunks;
-// };
-
-function groupSlides(slides, groupSize) {
-  let slideGroups = [];
-  for (let i = 0; i < slides.length; i += groupSize) {
-    const group = slides.slice(i, i + groupSize);
-    if (group.length > 0) {
-      slideGroups.push(group); // Only push non-empty groups
-    }
+// Function to group slides into chunks of 10
+const groupSlides = (slides, chunkSize = 10) => {
+  const chunks = [];
+  for (let i = 0; i < slides.length; i += chunkSize) {
+    chunks.push(slides.slice(i, i + chunkSize));
   }
-  return slideGroups;
-}
-
+  return chunks;
+};
 
 export const fileUpload = async (req, res, next) => {
   try {
     upload(req, res, async function (err) {
       if (err) return res.status(500).json({ error: err.message });
-      if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
       const pptFile = path.resolve(req.file.path);
       const assistant = 'asst_RWO3Vnbk7CIGBx7A7ppmJeWa';
 
       try {
         const slides = await extractPptxContent(pptFile);
-        const slideGroups = groupSlides(slides, 2);  
+
+        // Group slides into chunks of 10
+        const slideGroups = groupSlides(slides, 5);
+        const allResults = [];
 
         for (let i = 0; i < slideGroups.length; i++) {
           const group = slideGroups[i];
@@ -419,24 +410,35 @@ export const fileUpload = async (req, res, next) => {
           });
           const result = await openai.beta.threads.messages.list(run.thread_id);
 
-          // Parse the response
-          const output = result.data.find((msg) => msg.role === 'assistant').content[0].text?.value;
-          const parsedOutput = JSON.parse(output);
+          // Store results for this group
+          const json = result.data.find((item) => item.role === "assistant")
+            .content[0].text?.value;
+          console.log(json);
+          const output =
+            typeof JSON.parse(json) === "object"
+              ? JSON.parse(json)
+              : { error: "Something went wrong!" };
 
-          console.log("Parseddd outputtt: ", parsedOutput.transcript_segments);
-          // Send the result to the connected WebSocket client
+          allResults.push(output);
+
+          // Send the result to the connected WebSocket clients
           wss.clients.forEach((client) => {
             if (client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify({
-                groupNumber: i + 1,
-                result: parsedOutput.transcript_segments
-              }));
-            }else{
+              client.send(
+                JSON.stringify({
+                  groupNumber: i + 1,
+                  result: output.transcript_segments,
+                })
+              );
+            } else {
               console.log("Client not connected");
             }
           });
-          console.log("Partial response Sent");
-          // Optionally delete files and clean up after each group
+
+          console.log("Partial response sent");
+
+          // Optionally delete files after processing each group
+          console.log(result.data);
           await deleteFiles(result.data);
         }
 
@@ -458,3 +460,4 @@ export const fileUpload = async (req, res, next) => {
     next(error);
   }
 };
+
