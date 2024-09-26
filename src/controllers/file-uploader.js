@@ -351,19 +351,31 @@ async function getImageDescription(imagePath) {
 }
 
 const deleteFiles = async (messages) => {
-  // Flatten the array and extract only the files of type 'image_file'
-  const imageFiles = messages.flatMap((file) =>
-    file.content.filter((innerFile) => innerFile.type === "image_file")
-  );
+  try {
+    // Flatten the array and extract only the files of type 'image_file'
+    const imageFiles = messages.flatMap((file) =>
+      file.content.filter((innerFile) => innerFile.type === "image_file")
+    );
 
-  // Create an array of deletion promises
-  const deletePromises = imageFiles.map((innerFile) =>
-    openai.files.del(innerFile.image_file.file_id)
-  );
+    // If there are no image files to delete, return early
+    if (imageFiles.length === 0) {
+      console.log("No image files to delete.");
+      return;
+    }
 
-  // Wait for all deletion promises to resolve in parallel
-  await Promise.all(deletePromises);
+    // Create an array of deletion promises
+    const deletePromises = imageFiles.map((innerFile) =>
+      openai.files.del(innerFile.image_file.file_id)
+    );
+
+   
+    await Promise.all(deletePromises);
+    console.log("All image files deleted successfully.");
+  } catch (error) {
+    console.error("Error deleting files:", error);
+  }
 };
+
 
 // Function to group slides into chunks of 10
 const groupSlides = (slides, chunkSize = 10) => {
@@ -440,16 +452,13 @@ export const fileUpload = async (req, res, next) => {
 
           console.log("Partial response sent");
 
-          // Optionally delete files after processing each group
-          console.log(result.data);
           await deleteFiles(result.data);
         }
 
         res.status(200).json({
-          message: [].concat(
-            ...allResults.map((item) => item.transcript_segments)
-          ),
+          message: "All responses sent",
         });
+
       } catch (loaderError) {
         console.error(loaderError);
         res.status(400).json({ message: loaderError.message });
