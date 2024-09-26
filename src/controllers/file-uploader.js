@@ -1,4 +1,4 @@
-import WebSocket, { WebSocketServer } from 'ws';
+import WebSocket, { WebSocketServer } from "ws";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -15,10 +15,28 @@ const openai = new OpenAI({
 
 const wss = new WebSocketServer({ port: 8080 });
 
-wss.on('connection', (ws) => {
-  console.log('Client connected');
-  ws.on('close', () => console.log('Client disconnected'));
+const clients = new Map(); // Map to store client connections by deviceId
+
+wss.on("connection", (ws) => {
+  console.log("Client connected");
+
+  ws.on("message", (data) => {
+    const parsedData = JSON.parse(data);
+    if (parsedData.deviceId) {
+      clients.set(parsedData.deviceId, ws); // Map the WebSocket connection with deviceId
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("Client disconnected");
+    clients.forEach((value, key) => {
+      if (value === ws) {
+        clients.delete(key); // Remove the client when disconnected
+      }
+    });
+  });
 });
+
 
 // Set up Multer storage for file uploads
 const storage = multer.diskStorage({
@@ -368,14 +386,12 @@ const deleteFiles = async (messages) => {
       openai.files.del(innerFile.image_file.file_id)
     );
 
-   
     await Promise.all(deletePromises);
     console.log("All image files deleted successfully.");
   } catch (error) {
     console.error("Error deleting files:", error);
   }
 };
-
 
 // Function to group slides into chunks of 10
 const groupSlides = (slides, chunkSize = 10) => {
@@ -390,8 +406,9 @@ export const fileUpload = async (req, res, next) => {
   try {
     upload(req, res, async function (err) {
       if (err) return res.status(500).json({ error: err.message });
-      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-
+      if (!req.file)
+        return res.status(400).json({ message: "No file uploaded" });
+      console.log("Device id: ", req.body.deviceId);
       const pptFile = path.resolve(req.file.path);
       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
 
@@ -436,19 +453,20 @@ export const fileUpload = async (req, res, next) => {
 
           allResults.push(output);
 
-          // Send the result to the connected WebSocket clients
-          wss.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(
-                JSON.stringify({
-                  groupNumber: i + 1,
-                  result: output.transcript_segments,
-                })
-              );
-            } else {
-              console.log("Client not connected");
-            }
-          });
+          const clientSocket = clients.get(req.body.deviceId);
+
+          if (clientSocket && clientSocket.readyState === WebSocket.OPEN) {
+            clientSocket.send(
+              JSON.stringify({
+                groupNumber: i + 1,
+                result: output.transcript_segments,
+              })
+            );
+            console.log(`Response sent to device ${req.body.deviceId}`);
+          } else {
+            console.error(`No active WebSocket connection for device ${req.body.deviceId}`);
+          }
+          
 
           console.log("Partial response sent");
 
@@ -458,7 +476,6 @@ export const fileUpload = async (req, res, next) => {
         res.status(200).json({
           message: "All responses sent",
         });
-
       } catch (loaderError) {
         console.error(loaderError);
         res.status(400).json({ message: loaderError.message });
@@ -469,5 +486,3 @@ export const fileUpload = async (req, res, next) => {
     next(error);
   }
 };
-
-
