@@ -17,8 +17,6 @@ const wss = new WebSocketServer({ port: 8080 });
 const clients = new Map(); // Map to store client connections by deviceId
 
 wss.on("connection", (ws) => {
-  console.log("Client connected");
-
   let deviceId = null; // Variable to store deviceId for this connection
 
   // Handle incoming messages
@@ -45,8 +43,6 @@ wss.on("connection", (ws) => {
     clients.delete(deviceId);
   });
 });
-
-
 
 // Set up Multer storage for file uploads
 const storage = multer.diskStorage({
@@ -418,7 +414,7 @@ export const fileUpload = async (req, res, next) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!req.file)
         return res.status(400).json({ message: "No file uploaded" });
-      console.log("Device id: ", req.body.deviceId);
+
       const pptFile = path.resolve(req.file.path);
       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
 
@@ -455,7 +451,7 @@ export const fileUpload = async (req, res, next) => {
           // Store results for this group
           const json = result.data.find((item) => item.role === "assistant")
             .content[0].text?.value;
-          console.log(json);
+
           const output =
             typeof JSON.parse(json) === "object"
               ? JSON.parse(json)
@@ -474,9 +470,10 @@ export const fileUpload = async (req, res, next) => {
             );
             console.log(`Response sent to device ${req.body.deviceId}`);
           } else {
-            console.error(`No active WebSocket connection for device ${req.body.deviceId}`);
+            console.error(
+              `No active WebSocket connection for device ${req.body.deviceId}`
+            );
           }
-          
 
           console.log("Partial response sent");
 
