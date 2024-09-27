@@ -14,28 +14,38 @@ const openai = new OpenAI({
 });
 
 const wss = new WebSocketServer({ port: 8080 });
-
 const clients = new Map(); // Map to store client connections by deviceId
 
 wss.on("connection", (ws) => {
   console.log("Client connected");
 
+  let deviceId = null; // Variable to store deviceId for this connection
+
+  // Handle incoming messages
   ws.on("message", (data) => {
-    const parsedData = JSON.parse(data);
-    if (parsedData.deviceId) {
-      clients.set(parsedData.deviceId, ws); // Map the WebSocket connection with deviceId
+    try {
+      const parsedData = JSON.parse(data);
+
+      // Check if the message contains a deviceId
+      if (parsedData.deviceId) {
+        deviceId = parsedData.deviceId; // Store the deviceId for this connection
+        clients.set(deviceId, ws); // Map the WebSocket connection with deviceId
+        console.log(`Client Connected: DeviceId - ${deviceId}`);
+      }
+    } catch (error) {
+      console.error("Error parsing message:", error);
     }
   });
 
+  // Handle disconnection
   ws.on("close", () => {
-    console.log("Client disconnected");
-    clients.forEach((value, key) => {
-      if (value === ws) {
-        clients.delete(key); // Remove the client when disconnected
-      }
-    });
+    console.log(`Client disconnected: DeviceId - ${deviceId}`);
+
+    // Remove the client when disconnected
+    clients.delete(deviceId);
   });
 });
+
 
 
 // Set up Multer storage for file uploads
