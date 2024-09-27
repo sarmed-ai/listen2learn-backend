@@ -1,4 +1,5 @@
-import WebSocket, { WebSocketServer } from "ws";
+import { Server as SocketIOServer } from "socket.io";
+import http from "http"; // Import http module for the server
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -13,34 +14,34 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const wss = new WebSocketServer({ port: 8080 });
+const server = http.createServer();
+const io = new SocketIOServer(server); // Initialize Socket.IO with the HTTP server
 const clients = new Map(); // Map to store client connections by deviceId
 
-wss.on("connection", (ws) => {
-  let deviceId = null; // Variable to store deviceId for this connection
+io.on("connection", (socket) => {
+  let deviceId = null;
 
-  // Handle incoming messages
-  ws.on("message", (data) => {
-    try {
-      const parsedData = JSON.parse(data);
-
-      // Check if the message contains a deviceId
-      if (parsedData.deviceId) {
-        deviceId = parsedData.deviceId; // Store the deviceId for this connection
-        clients.set(deviceId, ws); // Map the WebSocket connection with deviceId
-        console.log(`Client Connected: DeviceId - ${deviceId}`);
-      }
-    } catch (error) {
-      console.error("Error parsing message:", error);
+  socket.on("register", (data) => {
+    if (data.deviceId) {
+      deviceId = data.deviceId;
+      clients.set(deviceId, socket);
+      console.log(`Client Connected: DeviceId - ${deviceId}`);
+      socket.emit("registered", { message: "Successfully registered" });
+    } else {
+      console.log("No deviceId provided for registration");
+      socket.emit("error", { message: "No deviceId provided" });
     }
   });
 
-  // Handle disconnection
-  ws.on("close", () => {
-    console.log(`Client disconnected: DeviceId - ${deviceId}`);
+  socket.on("disconnect", () => {
+    if (deviceId) {
+      console.log(`Client disconnected: DeviceId - ${deviceId}`);
+      clients.delete(deviceId);
+    }
+  });
 
-    // Remove the client when disconnected
-    clients.delete(deviceId);
+  socket.on("error", (error) => {
+    console.error("Socket error:", error);
   });
 });
 
@@ -408,6 +409,10 @@ const groupSlides = (slides, chunkSize = 10) => {
   return chunks;
 };
 
+server.listen(8080, () => {
+  console.log("Server is listening on port 8080");
+});
+
 export const fileUpload = async (req, res, next) => {
   try {
     upload(req, res, async function (err) {
@@ -415,25 +420,28 @@ export const fileUpload = async (req, res, next) => {
       if (!req.file)
         return res.status(400).json({ message: "No file uploaded" });
 
+      const deviceId = req.body.deviceId;
+      const clientSocket = clients.get(deviceId);
+
+      if (!clientSocket) {
+        console.error(`No socket connection found for device ${deviceId}`);
+        return res.status(400).json({ message: "No socket connection found" });
+      }
+
+
       const pptFile = path.resolve(req.file.path);
       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
 
       try {
         const slides = await extractPptxContent(pptFile);
-
-        // Group slides into chunks of 10
         const slideGroups = groupSlides(slides, 10);
         const allResults = [];
 
         for (let i = 0; i < slideGroups.length; i++) {
           const group = slideGroups[i];
-
           // Create a new thread for each group of slides
           const thread = await openai.beta.threads.create();
-
-          // Process slides in the current group
           const messages = await processSlides(group);
-          // Add messages to the current thread
           for (const message of messages) {
             await openai.beta.threads.messages.create(thread.id, {
               role: "user",
@@ -441,14 +449,11 @@ export const fileUpload = async (req, res, next) => {
             });
           }
 
-          // Call OpenAI run for this group of slides
           let run = await openai.beta.threads.runs.createAndPoll(thread.id, {
             assistant_id: assistant,
           });
 
           const result = await openai.beta.threads.messages.list(run.thread_id);
-
-          // Store results for this group
           const json = result.data.find((item) => item.role === "assistant")
             .content[0].text?.value;
 
@@ -456,40 +461,40 @@ export const fileUpload = async (req, res, next) => {
             typeof JSON.parse(json) === "object"
               ? JSON.parse(json)
               : { error: "Something went wrong!" };
-
           allResults.push(output);
 
           const clientSocket = clients.get(req.body.deviceId);
 
-          if (clientSocket && clientSocket.readyState === WebSocket.OPEN) {
-            clientSocket.send(
-              JSON.stringify({
+          if (clientSocket) {
+            clientSocket.emit(
+              "response",
+              {
                 groupNumber: i + 1,
                 result: output.transcript_segments,
-              })
+              },
+              (error) => {
+                if (error)
+                  console.error(
+                    `Error sending response to device ${req.body.deviceId}:`,
+                    error
+                  );
+              }
             );
-            console.log(`Response sent to device ${req.body.deviceId}`);
-          } else {
-            console.error(
-              `No active WebSocket connection for device ${req.body.deviceId}`
-            );
+            console.log("Partial response sent");
           }
 
-          console.log("Partial response sent");
-
+          console.log("Partial response sent ts: ", deviceId);
           await deleteFiles(result.data);
         }
 
-        res.status(200).json({
-          message: "All responses sent",
-        });
+        res.status(200).json({ message: "All responses sent" });
       } catch (loaderError) {
         console.error(loaderError);
         res.status(400).json({ message: loaderError.message });
       }
     });
   } catch (error) {
-    console.error(error);
+    console.error("Unexpected error in fileUpload:", error);
     next(error);
   }
 };
