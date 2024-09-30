@@ -428,7 +428,6 @@ export const fileUpload = async (req, res, next) => {
         return res.status(400).json({ message: "No socket connection found" });
       }
 
-
       const pptFile = path.resolve(req.file.path);
       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
 
@@ -464,6 +463,8 @@ export const fileUpload = async (req, res, next) => {
           allResults.push(output);
 
           const clientSocket = clients.get(req.body.deviceId);
+
+          console.log("Response: ", output.transcript_segments);
 
           if (clientSocket) {
             clientSocket.emit(
