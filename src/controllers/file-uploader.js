@@ -20,22 +20,35 @@ const clients = new Map(); // Map to store client connections by deviceId
 
 io.on("connection", (socket) => {
   let deviceId = null;
+  const timeStamp = new Date();
+  const formattedTimestamp = `${timeStamp.getFullYear()}-${String(
+    timeStamp.getMonth() + 1
+  ).padStart(2, "0")}-${String(timeStamp.getDate()).padStart(2, "0")} ${String(
+    timeStamp.getHours()
+  ).padStart(2, "0")}:${String(timeStamp.getMinutes()).padStart(
+    2,
+    "0"
+  )}:${String(timeStamp.getSeconds()).padStart(2, "0")}`;
 
   socket.on("register", (data) => {
     if (data.deviceId) {
       deviceId = data.deviceId;
       clients.set(deviceId, socket);
-      console.log(`Client Connected: DeviceId - ${deviceId}`);
+      console.log(
+        `${formattedTimestamp} Client Connected: DeviceId - ${deviceId}`
+      );
       socket.emit("registered", { message: "Successfully registered" });
     } else {
-      console.log("No deviceId provided for registration");
+      console.log(formattedTimestamp, " No deviceId provided for registration");
       socket.emit("error", { message: "No deviceId provided" });
     }
   });
 
   socket.on("disconnect", () => {
     if (deviceId) {
-      console.log(`Client disconnected: DeviceId - ${deviceId}`);
+      console.log(
+        `${formattedTimestamp}, Client disconnected: DeviceId - ${deviceId}`
+      );
       clients.delete(deviceId);
     }
   });
@@ -297,9 +310,20 @@ function extractTextFromPara(para) {
 const supportedFormats = new Set([".jpeg", ".jpg", ".png", ".tiff"]);
 
 async function processSlides(slides) {
+  const timeStamp = new Date();
+  const formattedTimestamp = `${timeStamp.getFullYear()}-${String(
+    timeStamp.getMonth() + 1
+  ).padStart(2, "0")}-${String(timeStamp.getDate()).padStart(2, "0")} ${String(
+    timeStamp.getHours()
+  ).padStart(2, "0")}:${String(timeStamp.getMinutes()).padStart(
+    2,
+    "0"
+  )}:${String(timeStamp.getSeconds()).padStart(2, "0")}`;
   const messages = []; // Collect messages from all slides
   for (const slide of slides) {
-    console.log(`\nProcessing Slide ${slide.slideNumber}`);
+    console.log(
+      `\n ${formattedTimestamp} Processing Slide ${slide.slideNumber}`
+    );
 
     // Process slide content elements in parallel
     const messageResultPromises = slide.slideContent.map(async (element) => {
@@ -414,9 +438,18 @@ server.listen(8080, () => {
 });
 
 export const fileUpload = async (req, res, next) => {
+  const now = new Date();
+  const formattedTimestamp = `${now.getFullYear()}-${String(
+    now.getMonth() + 1
+  ).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(
+    now.getHours()
+  ).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(
+    now.getSeconds()
+  ).padStart(2, "0")}`;
   try {
     upload(req, res, async function (err) {
       if (err) return res.status(500).json({ error: err.message });
+
       if (!req.file)
         return res.status(400).json({ message: "No file uploaded" });
 
@@ -424,9 +457,17 @@ export const fileUpload = async (req, res, next) => {
       const clientSocket = clients.get(deviceId);
 
       if (!clientSocket) {
-        console.error(`No socket connection found for device ${deviceId}`);
+        console.error(
+          `${formattedTimestamp} No socket connection found for device ${deviceId}`
+        );
         return res.status(400).json({ message: "No socket connection found" });
       }
+
+      console.log(
+        formattedTimestamp,
+        " File uploaded: ",
+        req.file.originalname
+      );
 
       const pptFile = path.resolve(req.file.path);
       const assistant = "asst_RWO3Vnbk7CIGBx7A7ppmJeWa";
@@ -464,7 +505,11 @@ export const fileUpload = async (req, res, next) => {
 
           const clientSocket = clients.get(req.body.deviceId);
 
-          console.log("Response: ", output.transcript_segments);
+          console.log(
+            formattedTimestamp,
+            " Response: ",
+            output.transcript_segments
+          );
 
           if (clientSocket) {
             clientSocket.emit(
@@ -476,7 +521,7 @@ export const fileUpload = async (req, res, next) => {
               (error) => {
                 if (error)
                   console.error(
-                    `Error sending response to device ${req.body.deviceId}:`,
+                    `${formattedTimestamp} Error sending response to device ${req.body.deviceId}:`,
                     error
                   );
               }
@@ -490,12 +535,16 @@ export const fileUpload = async (req, res, next) => {
 
         res.status(200).json({ message: "All responses sent" });
       } catch (loaderError) {
-        console.error(loaderError);
+        console.error(formattedTimestamp, "This ", loaderError);
         res.status(400).json({ message: loaderError.message });
       }
     });
   } catch (error) {
-    console.error("Unexpected error in fileUpload:", error);
+    console.error(
+      formattedTimestamp,
+      " Unexpected error in fileUpload:",
+      error
+    );
     next(error);
   }
 };
