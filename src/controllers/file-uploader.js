@@ -15,40 +15,31 @@ const openai = new OpenAI({
 });
 
 const server = http.createServer();
-const io = new SocketIOServer(server); // Initialize Socket.IO with the HTTP server
+const io = new SocketIOServer(server, {
+  pingTimeout: 60000, // 1 minute timeout
+  pingInterval: 25000, // 25 seconds between pings
+}); // Initialize Socket.IO with the HTTP server
 const clients = new Map(); // Map to store client connections by deviceId
 
 io.on("connection", (socket) => {
   let deviceId = null;
   const timeStamp = new Date();
-  const formattedTimestamp = `${timeStamp.getFullYear()}-${String(
-    timeStamp.getMonth() + 1
-  ).padStart(2, "0")}-${String(timeStamp.getDate()).padStart(2, "0")} ${String(
-    timeStamp.getHours()
-  ).padStart(2, "0")}:${String(timeStamp.getMinutes()).padStart(
-    2,
-    "0"
-  )}:${String(timeStamp.getSeconds()).padStart(2, "0")}`;
 
   socket.on("register", (data) => {
     if (data.deviceId) {
       deviceId = data.deviceId;
       clients.set(deviceId, socket);
-      console.log(
-        `${formattedTimestamp} Client Connected: DeviceId - ${deviceId}`
-      );
+      console.log(`${timeStamp} Client Connected: DeviceId - ${deviceId}`);
       socket.emit("registered", { message: "Successfully registered" });
     } else {
-      console.log(formattedTimestamp, " No deviceId provided for registration");
+      console.log(timeStamp, " No deviceId provided for registration");
       socket.emit("error", { message: "No deviceId provided" });
     }
   });
 
   socket.on("disconnect", () => {
     if (deviceId) {
-      console.log(
-        `${formattedTimestamp}, Client disconnected: DeviceId - ${deviceId}`
-      );
+      console.log(`${timeStamp}, Client disconnected: DeviceId - ${deviceId}`);
       clients.delete(deviceId);
     }
   });
